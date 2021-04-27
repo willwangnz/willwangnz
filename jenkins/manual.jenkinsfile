@@ -1,0 +1,235 @@
+// Copyright (c) 2021 Teletrac Navman.  All rights reserved.
+/*
+    Jenkinsfile for Hermes manual trigger build.
+*/
+
+def aft_level = "Normal"
+
+def aft_4_wire_label = "aft_4wire"
+def aft_20_wire_label = "aft_20wire"
+def aft_advanced_gateway_label = "aft_advanced_gateway"
+def aft_advanced_rugged_label = "aft_advanced_rugged"
+def aft_obd2_label = "aft_obd2"
+
+// Stage definitions.
+def hermes
+
+pipeline
+{
+    agent none
+
+    options
+    {
+        // Manual trigger build is only give developers to evaluate their build.
+        // Keep 30 days worth of history would be good enough.
+        buildDiscarder(logRotator(numToKeepStr: '30'))
+    }
+
+    parameters
+    {
+        booleanParam(name: "RUN_STATIC_ANALYSIS", defaultValue: false, description: "Run Static Analysis")
+        choice(name: "AFT_LEVEL", choices: ["Normal", "Disabled", "Smoke", "Regression"], description: "AFT Level")
+        string(name: "AFT_FEATURE_FILTER", defaultValue: "*", description: "AFT Feature Filter")
+        string(name: "AFT_TEST_CASE_FILTER", defaultValue: "*", description: "AFT Test Case Filter")
+        booleanParam(name: "AFT_RUN_4WIRE", defaultValue: false, description: "Run 4-Wire AFT")
+        booleanParam(name: "AFT_RUN_20WIRE", defaultValue: true, description: "Run 20-Wire AFT")
+        booleanParam(name: "AFT_RUN_ADVANCED_GATEWAY", defaultValue: false, description: "Run Advanced Gateway AFT")
+        booleanParam(name: "AFT_RUN_ADVANCED_RUGGED", defaultValue: false, description: "Run Advanced Rugged AFT")
+        booleanParam(name: "AFT_RUN_OBDII", defaultValue: false, description: "Run OBD2 AFT")
+        booleanParam(name: "AFT_RUN_4WIRE_SIMULATION", defaultValue: false, description: "Run Simulated 4-Wire AFT")
+        booleanParam(name: "AFT_RUN_20WIRE_SIMULATION", defaultValue: false, description: "Run Simulated 20-Wire AFT")
+        booleanParam(name: "AFT_RUN_ADVANCED_GATEWAY_SIMULATION", defaultValue: false, description: "Run Simulated Advanced Gateway AFT")
+        booleanParam(name: "AFT_RUN_ADVANCED_RUGGED_SIMULATION", defaultValue: false, description: "Run Simulated Advanced Rugged AFT")
+        booleanParam(name: "AFT_RUN_OBDII_SIMULATION", defaultValue: false, description: "Run Simulated OBDII AFT")
+        string(name: "EMAIL", defaultValue: "", description: "email to notify (works without '@teletracnavman.com')")
+    }
+
+    stages
+    {
+        stage("Setup")
+        {
+            agent any
+            steps
+            {
+                script
+                {
+                    // Load stage methods.
+                    hermes = load "jenkins/methods/hermes.groovy"
+
+                    // TODO: Jenkins 'when' statement executes after the agent is allocated.
+                    //       The steps below are a work-around to ensure quick builds don't wait for AFT agents.
+                    //       A better solution would not execute these steps at all.
+                    //       This may be possible by automatically generating AFT stages.
+                    if (!params.AFT_RUN_4WIRE) { aft_4_wire_label = "static_analysis" }
+                    if (!params.AFT_RUN_20WIRE) { aft_20_wire_label = "static_analysis" }
+                    if (!params.AFT_RUN_ADVANCED_GATEWAY) { aft_advanced_gateway_label = "static_analysis" }
+                    if (!params.AFT_RUN_ADVANCED_RUGGED) { aft_advanced_rugged_label = "static_analysis" }
+                    if (!params.AFT_RUN_OBDII) { aft_obd2_label = "static_analysis" }
+
+                    aft_level = params.AFT_LEVEL
+
+                }
+            }
+        }
+
+        stage("Static Analysis")
+        {
+            parallel
+            {
+                stage("Build")
+                {
+                    agent any
+                    steps { script { hermes.executeBuild() } }
+                }
+                stage("Check Formatting")
+                {
+                    when { expression { params.RUN_STATIC_ANALYSIS == true } }
+                    agent any
+                    steps { script { hermes.executeFormatCheck() } }
+                }
+                stage("Lint")
+                {
+                    when { expression { params.RUN_STATIC_ANALYSIS == true } }
+                    agent any
+                    steps { script { hermes.executeLint() } }
+                }
+                stage("Unit Tests (C)")
+                {
+                    when { expression { params.RUN_STATIC_ANALYSIS == true } }
+                    agent any
+                    steps { script { hermes.executeCUnitTest() } }
+                }
+                stage("Unit Tests (Python)")
+                {
+                    when { expression { params.RUN_STATIC_ANALYSIS == true } }
+                    agent any
+                    steps { script { hermes.executePythonUnitTest() } }
+                }
+            }
+        }
+        stage("AFT")
+        {
+            when { expression { (aft_level != "Disabled") } }
+            parallel
+            {
+                stage("4-Wire Simulated AFT")
+                {
+                    when { expression { params.AFT_RUN_4WIRE_SIMULATION == true } }
+                    agent { label "static_analysis" }
+                    steps { script { hermes.executeAft("4_wire_simulation",
+                                                       aft_level,
+                                                       params.AFT_FEATURE_FILTER,
+                                                       params.AFT_TEST_CASE_FILTER,
+                                                       true,
+                                                       "4_wire") } }
+                }
+                stage("20-Wire Simulated AFT")
+                {
+                    when { expression { params.AFT_RUN_20WIRE_SIMULATION == true } }
+                    agent { label "static_analysis" }
+                    steps { script { hermes.executeAft("20_wire_simulation",
+                                                       aft_level,
+                                                       params.AFT_FEATURE_FILTER,
+                                                       params.AFT_TEST_CASE_FILTER,
+                                                       true,
+                                                       "20_wire") } }
+                }
+                stage("Advanced Gateway Simulated AFT")
+                {
+                    when { expression { params.AFT_RUN_ADVANCED_GATEWAY_SIMULATION == true } }
+                    agent { label "static_analysis" }
+                    steps { script { hermes.executeAft("advanced_gateway_simulation",
+                                                       aft_level,
+                                                       params.AFT_FEATURE_FILTER,
+                                                       params.AFT_TEST_CASE_FILTER,
+                                                       true,
+                                                       "advanced_gateway") } }
+                }
+                stage("Advanced Rugged Simulated AFT")
+                {
+                    when { expression { params.AFT_RUN_ADVANCED_RUGGED_SIMULATION == true } }
+                    agent { label "static_analysis" }
+                    steps { script { hermes.executeAft("advanced_rugged_simulation",
+                                                       aft_level,
+                                                       params.AFT_FEATURE_FILTER,
+                                                       params.AFT_TEST_CASE_FILTER,
+                                                       true,
+                                                       "advanced_rugged") } }
+                }
+                stage("OBD2 Simulated AFT")
+                {
+                    when { expression { params.AFT_RUN_OBDII_SIMULATION == true } }
+                    agent { label "static_analysis" }
+                    steps { script { hermes.executeAft("obd2_simulation",
+                                                       aft_level,
+                                                       params.AFT_FEATURE_FILTER,
+                                                       params.AFT_TEST_CASE_FILTER,
+                                                       true,
+                                                       "obd2") } }
+                }
+                stage("4-Wire AFT")
+                {
+                    when { expression { params.AFT_RUN_4WIRE == true } }
+                    agent { label aft_4_wire_label }
+                    steps { script { hermes.executeAft("4_wire",
+                                                       aft_level,
+                                                       params.AFT_FEATURE_FILTER,
+                                                       params.AFT_TEST_CASE_FILTER) } }
+                }
+                stage("20-Wire AFT")
+                {
+                    when { expression { params.AFT_RUN_20WIRE == true } }
+                    agent { label aft_20_wire_label }
+                    steps { script { hermes.executeAft("20_wire",
+                                                       aft_level,
+                                                       params.AFT_FEATURE_FILTER,
+                                                       params.AFT_TEST_CASE_FILTER) } }
+                }
+                stage("Advanced Gateway AFT")
+                {
+                    when { expression { params.AFT_RUN_ADVANCED_GATEWAY == true } }
+                    agent { label aft_advanced_gateway_label }
+                    steps { script { hermes.executeAft("advanced_gateway",
+                                                       aft_level,
+                                                       params.AFT_FEATURE_FILTER,
+                                                       params.AFT_TEST_CASE_FILTER) } }
+                }
+                stage("Advanced Rugged AFT")
+                {
+                    when { expression { params.AFT_RUN_ADVANCED_RUGGED == true } }
+                    agent { label aft_advanced_rugged_label }
+                    steps { script { hermes.executeAft("advanced_rugged",
+                                                       aft_level,
+                                                       params.AFT_FEATURE_FILTER,
+                                                       params.AFT_TEST_CASE_FILTER) } }
+                }
+                stage("OBD2 AFT")
+                {
+                    when { expression { params.AFT_RUN_OBDII == true } }
+                    agent { label aft_obd2_label }
+                    steps { script { hermes.executeAft("obd2",
+                                                       aft_level,
+                                                       params.AFT_FEATURE_FILTER,
+                                                       params.AFT_TEST_CASE_FILTER) } }
+                }
+            }
+        }
+    }
+    post {
+        success {
+            emailext (
+                to: "${params.EMAIL}",
+                subject: "SUCCESS - Manual Aft",
+                body: "<p>Manual test <b>PASSED</b>; <a href='${env.BUILD_URL}'>Jenkins Build Result</a></p>"
+            )
+        }
+        failure {
+			emailext (
+			    to: "${params.EMAIL}",
+			    subject: "FAILURE - Manual Aft",
+			    body: "<p>Manual test <b>FAILED</b>; <a href='${env.BUILD_URL}'>Jenkins Build Result</a></p>"
+            )
+        }
+    }
+}
+
